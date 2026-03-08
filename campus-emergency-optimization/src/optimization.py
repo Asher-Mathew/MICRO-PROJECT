@@ -1,5 +1,6 @@
 import pandas as pd
 import pulp
+import folium
 
 DAYS = 365
 BUDGET = 1500000
@@ -17,9 +18,7 @@ facilities = pd.merge(facilities, demands, on="facility_id")
 facilities["annual_demand"] = facilities["daily_demand"] * DAYS
 
 capacity_column = next(
-    (col for col in warehouses.columns if "capacity" in col.lower()),
-    None
-)
+    (col for col in warehouses.columns if "capacity" in col.lower()),None)
 
 if capacity_column is None:
     raise Exception("Capacity column not found in warehouses.csv")
@@ -150,3 +149,51 @@ print("Transportation Cost :", pulp.value(transport_cost))
 print("Construction Cost   :", pulp.value(construction_cost))
 print("Operational Cost    :", pulp.value(operational_cost))
 print("Total Cost          :", pulp.value(model.objective))
+
+if pulp.LpStatus[model.status] == 'Optimal':
+    # 1. Initialize Map (Centered on the coordinates from your geographic_bounds.csv)
+    # Based on your data: 40.8075, -73.9626
+    campus_map = folium.Map(location=[40.8075, -73.9626], zoom_start=15, tiles="OpenStreetMap")
+
+    # 2. Add Warehouses
+    for _, row in warehouses.iterrows():
+        w_id = row['warehouse_id']
+        is_open = open_w[w_id].varValue == 1
+        color = 'green' if is_open else 'red'
+        
+        folium.Marker(
+            location=[row['latitude'], row['longitude']],
+            popup=f"Warehouse: {row['warehouse_name']}<br>Status: {'OPEN' if is_open else 'CLOSED'}",
+            icon=folium.Icon(color=color, icon='home')
+        ).add_to(campus_map)
+
+    # 3. Add Facilities
+    for _, row in facilities.iterrows():
+        folium.Marker(
+            location=[row['latitude'], row['longitude']],
+            popup=f"Facility: {row['facility_name']}<br>Annual Demand: {row['annual_demand']}",
+            icon=folium.Icon(color='blue', icon='university', prefix='fa')
+        ).add_to(campus_map)
+
+    # 4. Draw Optimal Routes
+    for w in warehouses["warehouse_id"]:
+        for f in facilities["facility_id"]:
+            qty = ship[w, f].varValue
+            if qty and qty > 0:
+                # Get start and end points
+                start = warehouses.loc[warehouses['warehouse_id'] == w, ['latitude', 'longitude']].values[0]
+                end = facilities.loc[facilities['facility_id'] == f, ['latitude', 'longitude']].values[0]
+                
+                folium.PolyLine(
+                    locations=[start, end],
+                    weight=3,
+                    color='orange',
+                    opacity=0.8,
+                    tooltip=f"Route: {w} to {f} | Qty: {qty:,.0f}"
+                ).add_to(campus_map)
+
+    # 5. Save and Export
+    campus_map.save("../campus_map.html")
+    print("\nSuccess! Map saved as 'campus_map.html' in the project root.")
+else:
+    print("Optimization failed to find an optimal solution.")
